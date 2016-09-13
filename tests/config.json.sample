@@ -1,0 +1,8 @@
+{
+    "proto": "oracle+cx_oracle:\/\/",
+    "user": "",
+    "pass": "",
+    "host": "",
+    "port": 1521,
+    "service_name": ""
+}
