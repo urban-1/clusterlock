@@ -18,6 +18,9 @@ __all__ = []
 def get_who():
     return "%s:%d:%d" % (socket.getfqdn(), os.getpid(), threading.currentThread().ident)
 
+class ClusterLockError(Exception):
+    pass
+
 class CustomBase(object):
     
     def toDict(self):
@@ -45,7 +48,7 @@ class LockLine(Base):
 
 class ClusterLockBase(object):
 
-    def __init__(self, engine, session, what, context="-", min_bound=0, max_bound=1, value=1):
+    def __init__(self, engine, session, what, context="-", min_bound=0, max_bound=1, value=1, sleep_interval=0.1):
         """
         Initialize the instance with a given session and engine
         """
@@ -55,6 +58,8 @@ class ClusterLockBase(object):
         self._context = context
         self._min_bound = min_bound
         self._max_bound = max_bound
+        self._time_slept = 0
+        self._sleep_interval = sleep_interval
         
         # Create schema
         Base.metadata.create_all(self._engine)
@@ -78,13 +83,15 @@ class ClusterLockBase(object):
     def __exit__(self, type, value, traceback):
         self.release()
     
-    def aquire(self):
+    def aquire(self, max_wait=0):
         """
         Lock an entry. This should match the ticket_number and current status while 
         the status should not be locked
         """
         rc = 0
         who = get_who()
+        self._time_slept = 0
+        
         while rc == 0:
             lg.debug("Trying")
             try:
@@ -101,7 +108,11 @@ class ClusterLockBase(object):
                 lg.debug(traceback.format_exc())
             
             if rc == 0:
+                if max_wait > 0 and self._time_slept >= max_wait:
+                    raise ClusterLockError("Max time used... failed to acquire")
+                
                 time.sleep(0.1)
+                self._time_slept += self._sleep_interval
         
     def release(self):
         """

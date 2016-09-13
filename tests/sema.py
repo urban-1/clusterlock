@@ -37,10 +37,12 @@ name = sys.argv[1]
 
 while [ True ]:
     print("%10s: Waiting" % name)
-    with lock:
-        print("%10s: Got it!" % name)
-        time.sleep(uniform(0.5, 5.5))
     
+    lock.aquire(max_wait=2)
+    print("%10s: Got it!" % name)
+    time.sleep(uniform(0.5, 5.5))
+    
+    lock.release()
     print("%10s: Released" % name)
     time.sleep(0.1)
 
