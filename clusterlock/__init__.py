@@ -124,9 +124,6 @@ class ClusterLockBase(object):
             except:
                 self._session.rollback()
                 lg.debug(traceback.format_exc())
-         
-            if rc == 0:
-                time.sleep(0.1)
     
     def reset(self, value=None):
         """
@@ -140,7 +137,8 @@ class ClusterLockBase(object):
                       .filter(LockLine.count < self._max_bound).update({"count": value, "who": ""})
         lg.debug("Release lock resulted in %d rows affected" % rc)
         self._session.commit()
-    
+
+
 class Lock(ClusterLockBase):
     
     
