@@ -37,8 +37,6 @@ while [ True ]:
         lock.release()
     except ClusterLockReleaseError as e:
         pass
-    except ClusterCleanUp as e2:
-        pass
     print("%10s: Released" % name)
     time.sleep(0.1)
 

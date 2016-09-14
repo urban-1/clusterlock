@@ -17,17 +17,6 @@ import os
 import socket
 
 
-class ClusterCleanUp(Exception):
-    """
-    Used as an event to notify you that something was cleaned up. You can find
-    the context (ctx) and event (evt) attached
-    """
-    def __init__(self, message, ctx=None, evt=None):
-        super(ClusterCleanUp, self).__init__(message)
-        self.ctx=ctx
-        self.evt=evt
-
-
 class ClusterLockError(Exception):
     """
     We failed to lock something. Thrown when a ``max_wait`` has been exhausted
@@ -243,7 +232,7 @@ class ClusterLockBase(object):
         for entry in expired:
             cid = entry[1].id
             tmpmsg = "Cleaning Context ID=%d, who=%s, started=%d" % (cid, entry[0].who, entry[0].started)
-            lg.debug(tmpmsg)
+            lg.info(tmpmsg)
             # Remove lock event
             self._session.delete(entry[0])
             # Add one to the pool
@@ -259,10 +248,8 @@ class ClusterLockBase(object):
         if cleaned:
             if self._tag == "db:clean-lock":
                 cleanLock.__attempted = False
-            raise ClusterCleanUp(tmpmsg, entry[1], entry[0])
         
     def get_clean_lock(self):
-        global CLEAN_LOCKS
         
         # Get a unique thread-safe ID
         tid = get_who()
@@ -277,11 +264,10 @@ class ClusterLockBase(object):
         return CLEAN_LOCKS[tid]
     
     def aquire(self, max_wait=0):
+        """
+        Acquire.
+        """
         lg.debug("Aquire %s" % self._tag)
-        """
-        Lock an entry. This should match the ticket_number and current status while 
-        the status should not be locked
-        """
         rc = 0
         who = get_who()
         self._time_slept = 0
@@ -289,8 +275,8 @@ class ClusterLockBase(object):
         while rc == 0:
             #lg.debug("Trying")
             try:
-                rc = LockContext.query.filter(LockContext.what==self._what)\
-                                .filter(LockContext.context==self._context)\
+                rc = LockContext.query.filter(LockContext.what == self._what)\
+                                .filter(LockContext.context == self._context)\
                                 .filter(LockContext.count > self._min_bound).update({"count": LockContext.count - 1})
                 
                 #lg.debug("Acquire lock resulted in %d rows affected" % rc)
@@ -317,8 +303,9 @@ class ClusterLockBase(object):
                     
             else:
                 # Create our event...
-                ctx = LockContext.query.filter(LockContext.what==self._what and \
-                                               LockContext.context==self._context).one()
+                ctx = LockContext.query.filter(LockContext.what==self._what)\
+                                       .filter(LockContext.context ==self._context ).one()
+                
                 self._events.append(LockEvent(
                         context_id=ctx.id,
                         started=int(time.time()),
@@ -331,8 +318,7 @@ class ClusterLockBase(object):
         
     def release(self):
         """
-        Lock an entry. This should match the ticket_number and current status while 
-        the status should not be locked
+        Release
         """
         who = get_who()
         rc = 0
@@ -344,8 +330,8 @@ class ClusterLockBase(object):
                 
                 # Reduce count ONLY of the above succeeds...
                 rc = LockContext.query.filter(LockContext.what==self._what)\
-                                    .filter(LockContext.context==self._context)\
-                                    .filter(LockContext.count < self._max_bound).update({"count": LockContext.count + 1})
+                                      .filter(LockContext.context==self._context)\
+                                      .filter(LockContext.count < self._max_bound).update({"count": LockContext.count + 1})
                 
                 #lg.debug("Release lock resulted in %d rows affected" % rc)
                 
@@ -361,13 +347,15 @@ class ClusterLockBase(object):
 
     
 class Lock(ClusterLockBase):
-    
+    """
+    The Lock class allows for only one lock at a time
+    """
     
     def __init__(self, engine, session, what, context="-", **kw):
         """
         Limited constructor
         """
-        super(Lock, self).__init__(engine, session, what, context, **kw)
+        super(Lock, self).__init__(engine, session, what, context, value=1, max_bound=1, min_bound=0, **kw)
         
         
     def reset(self):
