@@ -18,18 +18,42 @@ import socket
 
 
 class ClusterCleanUp(Exception):
-    pass
+    """
+    Used as an event to notify you that something was cleaned up. You can find
+    the context (ctx) and event (evt) attached
+    """
+    def __init__(self, message, ctx=None, evt=None):
+        super(ClusterCleanUp, self).__init__(message)
+        self.ctx=ctx
+        self.evt=evt
 
 
 class ClusterLockError(Exception):
+    """
+    We failed to lock something. Thrown when a ``max_wait`` has been exhausted
+    """
     pass
 
 
 class ClusterLockReleaseError(Exception):
+    """
+    This is usually expected after a `ClusterCleanUp` event. If us or anyone else
+    cleaned our lock forsefully but our process was still active, this error
+    will be thrown when the process eventually tries to release the lock
+    """
     pass
 
 
-CLEAN_LOCK = None
+class ClusterCleanUpError(Exception):
+    pass
+
+
+CLEAN_LOCKS = {}
+"""One cleaner per thread, no more, no less"""
+CLEAN_FAIL_MSG = ("Failed to acquire 'clean-lock' which means that either the "
+                  "db connection is not there or there is a locked entry "
+                  "which you have to manually unlock. Cleaning the cleaning lock "
+                  "has already failed... Nothing else I can do")
 
 def get_backend(cfgpath):
     with open(cfgpath, "r") as f:
@@ -109,6 +133,7 @@ class ClusterLockBase(object):
         self._time_slept = 0
         self._sleep_interval = sleep_interval
         self._events = []
+        self._tag = "%s:%s" % (self._what, self._context)
         
         # Create schema only if required
         if not engine.dialect.has_table(engine, "cluster_lock_ctx"): 
@@ -133,6 +158,7 @@ class ClusterLockBase(object):
                     duration=duration)
                 
                 self._session.add(ll)
+                print("INSERT")
                 self._session.commit()
         except:
             self._session.rollback()
@@ -145,14 +171,83 @@ class ClusterLockBase(object):
     def __exit__(self, type, value, traceback):
         self.release()
         
-    def get_clean_lock(self):
-        global CLEAN_LOCK
-        if CLEAN_LOCK is None:
-            CLEAN_LOCK = Lock(self._engine, self._session, "db", "clean-lock")
+    def __handle_cleanup(self):
+        """
+        This is a function only because it was long and complex...
+        """
+        #lg.debug("CLEAN %s: %.2f >= %.2f" % (self._tag, self._time_slept, self._cleanup_every))
+        lg.debug("%s: Cleaning up" % self._tag)
         
-        return CLEAN_LOCK
+        cleanLock = self.get_clean_lock()
+        # Handle cleaning the cleaner!
+        if self._tag == "db:clean-lock":
+            lg.info("Cleaning the cleaner (did this already? = %s)" % str(cleanLock.__attempted))
+            # Try only once...
+            if cleanLock.__attempted:
+                raise ClusterCleanUpError(CLEAN_FAIL_MSG)
+            
+            # Mark that we have tried that!
+            cleanLock.__attempted = True
+            
+        # Aquire cleaning lock ... wait 30 seconds... if this fails
+        # stop with the appropriate error message
+        try:
+            cleanLock.aquire(max_wait=10) # TODO: Module level Parameter
+        except ClusterLockError:
+            raise ClusterCleanUpError(CLEAN_FAIL_MSG)
+        
+        
+        lg.debug("Got Cleaning up LOCK")
+        now = int(time.time())
+        expired = self._session.query(LockEvent, LockContext)\
+            .filter(LockEvent.context_id == LockContext.id)\
+            .filter(LockContext.what == self._what)\
+            .filter(LockContext.context == self._context)\
+            .filter(LockContext.duration > 0)\
+            .filter(now - LockEvent.started > LockContext.duration)\
+            .all()
+        
+        cleaned = False
+        
+        # Loop and clean!
+        for entry in expired:
+            cid = entry[1].id
+            tmpmsg = "Cleaning Context ID=%d, who=%s, started=%d" % (cid, entry[0].who, entry[0].started)
+            lg.debug(tmpmsg)
+            # Remove lock event
+            self._session.delete(entry[0])
+            # Add one to the pool
+            entry[1].count += 1
+            # Done
+            self._session.commit()
+            cleaned = True
+        
+        # release the lock
+        cleanLock.release()
+        
+        # If we did something
+        if cleaned:
+            if self._tag == "db:clean-lock":
+                cleanLock.__attempted = False
+            raise ClusterCleanUp(tmpmsg, entry[1], entry[0])
+        
+    def get_clean_lock(self):
+        global CLEAN_LOCKS
+        
+        # Get a unique thread-safe ID
+        tid = get_who()
+        
+        if tid not in CLEAN_LOCKS.keys():
+            CLEAN_LOCKS[tid] = Lock(self._engine, self._session, "db", "clean-lock", 
+                                duration=30,      # Cleaner should not take more than ... TODO: Module level Parameter
+                                cleanup_every=10  # TODO: Module level Parameter
+                                )
+            CLEAN_LOCKS[tid].__attempted = False
+        
+        return CLEAN_LOCKS[tid]
     
     def aquire(self, max_wait=0):
+        lg.debug("Aquire %s" % self._tag)
         """
         Lock an entry. This should match the ticket_number and current status while 
         the status should not be locked
@@ -176,35 +271,20 @@ class ClusterLockBase(object):
                 lg.debug(traceback.format_exc())
             
             if rc == 0:
-                if max_wait > 0 and self._time_slept >= max_wait:
-                    raise ClusterLockError("Max time used... failed to acquire")
                 
+                # Sleep as for a while
                 time.sleep(0.1)
                 self._time_slept += self._sleep_interval
                 
-                # cleanup_every
-                if self._time_slept > self._cleanup_every:
-                    lg.debug("Cleaning up")
-                    now = int(time.time())
-                    with self.get_clean_lock():
-                        expired = self._session.query(LockEvent, LockContext)\
-                            .filter(LockEvent.context_id == LockContext.id)\
-                            .filter(LockContext.what == self._what)\
-                            .filter(LockContext.context == self._context)\
-                            .filter(LockContext.duration > 0)\
-                            .filter(now - LockEvent.started > LockContext.duration)\
-                            .all()
-                        
-                        # Loop and clean!
-                        for entry in expired:
-                            cid = entry[1].id
-                            lg.debug("Cleaning Context ID=%d, who=%s, started=%d" % (cid, entry[0].who, entry[0].started))
-                            # Remove lock event
-                            self._session.delete(entry[0])
-                            # Add one to the pool
-                            entry[1].count += 1
-                            # Done
-                            self._session.commit()
+                # Handle max_time here since we failed to aquire
+                #lg.debug("MAX %s: %.2f >= %.2f" % (self._tag, self._time_slept, max_wait))
+                if max_wait > 0 and self._time_slept >= max_wait:
+                    raise ClusterLockError("Max time used... failed to acquire")
+                
+                # Handle cleaning
+                if self._cleanup_every > 0 and self._time_slept > self._cleanup_every:
+                    self.__handle_cleanup()
+                    
             else:
                 # Create our event...
                 ctx = LockContext.query.filter(LockContext.what==self._what and \
@@ -253,11 +333,11 @@ class ClusterLockBase(object):
 class Lock(ClusterLockBase):
     
     
-    def __init__(self, engine, session, what, context="-"):
+    def __init__(self, engine, session, what, context="-", **kw):
         """
         Limited constructor
         """
-        super(Lock, self).__init__(engine, session, what, context)
+        super(Lock, self).__init__(engine, session, what, context, **kw)
         
         
     def reset(self):
