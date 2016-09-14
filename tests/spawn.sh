@@ -1,5 +1,12 @@
 #!/bin/bash
 
+if [ $# -ne 1 ]; then
+    echo "Which application should I spawn:"
+    echo "Usage:"
+    echo "   $0 <app>"
+    echo 
+    exit 1
+fi
 app="$1"
 
 

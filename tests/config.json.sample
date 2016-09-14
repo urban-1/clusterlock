@@ -1,8 +1,21 @@
 {
-    "proto": "oracle+cx_oracle:\/\/",
-    "user": "",
-    "pass": "",
-    "host": "",
-    "port": 1521,
-    "service_name": ""
+    "mode": "mysql",
+    
+    "mysql": {
+        "proto": "mysql+mysqlconnector:\/\/",
+        "user": "",
+        "pass": "",
+        "host": "localhost",
+        "port": 3306,
+        "database": "clusterlock"
+    },
+    
+    "oracle": {
+        "proto": "oracle+cx_oracle:\/\/",
+        "user": "",
+        "pass": "",
+        "host": "",
+        "port": 1521,
+        "service_name": ""
+    }
 }

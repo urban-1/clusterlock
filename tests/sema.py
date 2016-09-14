@@ -2,33 +2,21 @@
 
 import sys
 import time
-import json
 import threading
-from sqlalchemy import create_engine
-from sqlalchemy.orm import  scoped_session, sessionmaker
-from base64 import b64decode
 import logging as lg
 from random import uniform
 
 import setpath
 
-from clusterlock import Semaphore, ClusterLockReleaseError
+from clusterlock import Semaphore, ClusterLockReleaseError, get_backend
 
-#url = 'sqlite:///test.sqlite'
-
+if len(sys.argv) < 2:
+    print("Ahhmm i need a job name as 1st argument")
+    exit()
+    
 lg.basicConfig(level=lg.INFO)
 
-with open("config.json") as f:
-    cfg = json.loads(f.read())
-
-# Build connection URL
-url = "%s%s:%s@%s/?service_name=%s" % (cfg['proto'],
-                                    cfg['user'],
-                                    b64decode(cfg['pass']),
-                                    cfg['host'],
-                                    cfg['service_name'])
-engine = create_engine(url)
-session = scoped_session(sessionmaker(bind=engine))
+engine, session = get_backend("config.json")
 
 # Create a new lock for a specific device under the domain 
 # light-levels

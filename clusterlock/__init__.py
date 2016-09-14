@@ -2,8 +2,11 @@ import logging as lg
 import traceback
 import threading
 import time
+import json
+from base64 import b64decode
 
-from sqlalchemy import Column, Integer, String, Boolean, UniqueConstraint, Sequence, Text, ForeignKey, PrimaryKeyConstraint
+
+from sqlalchemy import Column, Integer, String, Boolean, UniqueConstraint, Sequence, Text, ForeignKey, PrimaryKeyConstraint, create_engine
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker, class_mapper
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -13,13 +16,10 @@ import setpath
 import os
 import socket
 
-__all__ = ['ClusterLockError']
 
+class ClusterCleanUp(Exception):
+    pass
 
-CLEAN_LOCK = None
-
-def get_who():
-    return "%s:%d:%d" % (socket.getfqdn(), os.getpid(), threading.currentThread().ident)
 
 class ClusterLockError(Exception):
     pass
@@ -27,6 +27,30 @@ class ClusterLockError(Exception):
 
 class ClusterLockReleaseError(Exception):
     pass
+
+
+CLEAN_LOCK = None
+
+def get_backend(cfgpath):
+    with open(cfgpath, "r") as f:
+        cfg = json.loads(f.read())
+    
+    if cfg["mode"] == "oracle":
+        o = cfg["oracle"]
+        url = "%s%s:%s@%s/?service_name=%s" % \
+            (o['proto'], o['user'], b64decode(o['pass']), o['host'], o['service_name'])
+    elif cfg["mode"] == "mysql":
+        m = cfg["mysql"]
+        url = "%s%s:%s@%s/%s" % \
+            (m['proto'], m['user'], b64decode(m['pass']), m['host'], m['database'])
+    
+    engine = create_engine(url)
+    session = scoped_session(sessionmaker(bind=engine))
+    
+    return engine, session
+
+def get_who():
+    return "%s:%d:%d" % (socket.getfqdn(), os.getpid(), threading.currentThread().ident)
 
 
 class CustomBase(object):
@@ -52,20 +76,20 @@ class LockContext(Base):
     count = Column(Integer)          # Count for semaphores
     context = Column(String(512))    # Which software context (application)
     duration = Column(Integer, default=-1)       # Average job duration (used to identify dead locks)
-    events = relationship("LockEvent", cascade="all, delete-orphan")
+    events = relationship("LockEvent", cascade="save-update, merge, delete")
 
     
 
 class LockEvent(Base):
-    __tablename__ = 'cluster_lock_event'
+    __tablename__ = 'cluster_lock_evt'
     __table_args__ = (
         PrimaryKeyConstraint('context_id', 'started', 'who'),
     )
     
-    context_id = Column(Integer, ForeignKey('cluster_lock_ctx.id'))
-    started = Column(Integer)                  # When this started, epoch
-    ended = Column(Integer, default=0)         # When this ended, epoch
-    who = Column(String(512))                  # Who locked it last
+    context_id = Column(Integer, ForeignKey('cluster_lock_ctx.id'), autoincrement=False)
+    started = Column(Integer, autoincrement=False)                  # When this started, epoch
+    ended = Column(Integer, default=0, autoincrement=False)         # When this ended, epoch
+    who = Column(String(512))                                       # Who locked it last
     
     
 
@@ -86,24 +110,30 @@ class ClusterLockBase(object):
         self._sleep_interval = sleep_interval
         self._events = []
         
-        # Create schema
-        try:
+        # Create schema only if required
+        if not engine.dialect.has_table(engine, "cluster_lock_ctx"): 
             Base.metadata.create_all(self._engine)
-        except:
-            pass
+        
         
         Base.query = self._session.query_property()
         
         try:
-            # Create a LockContext for this context
-            ll = LockContext(
-                what=what,
-                count=value,
-                context = context,
-                duration=duration)
-            
-            self._session.add(ll)
-            self._session.commit()
+            # try to get it first (preserves auto increment IDs from failed
+            # insert attempts...)
+            rc = LockContext.query.filter(LockContext.what==self._what)\
+                                .filter(LockContext.context==self._context)
+            try:
+                rc.one()
+            except:
+                # Create a LockContext for this context - it does not exist
+                ll = LockContext(
+                    what=what,
+                    count=value,
+                    context=context,
+                    duration=duration)
+                
+                self._session.add(ll)
+                self._session.commit()
         except:
             self._session.rollback()
             
@@ -118,7 +148,7 @@ class ClusterLockBase(object):
     def get_clean_lock(self):
         global CLEAN_LOCK
         if CLEAN_LOCK is None:
-            CLEAN_LOCK = ClusterLockBase(self._engine, self._session, "db", "clean-lock")
+            CLEAN_LOCK = Lock(self._engine, self._session, "db", "clean-lock")
         
         return CLEAN_LOCK
     
@@ -130,16 +160,15 @@ class ClusterLockBase(object):
         rc = 0
         who = get_who()
         self._time_slept = 0
-        self._count_slept = 0
         
         while rc == 0:
-            lg.debug("Trying")
+            #lg.debug("Trying")
             try:
                 rc = LockContext.query.filter(LockContext.what==self._what)\
                                 .filter(LockContext.context==self._context)\
                                 .filter(LockContext.count > self._min_bound).update({"count": LockContext.count - 1})
                 
-                lg.debug("Acquire lock resulted in %d rows affected" % rc)
+                #lg.debug("Acquire lock resulted in %d rows affected" % rc)
                 self._session.commit()
             except:
                 self._session.rollback()
@@ -152,10 +181,9 @@ class ClusterLockBase(object):
                 
                 time.sleep(0.1)
                 self._time_slept += self._sleep_interval
-                self._count_slept += 1
                 
                 # cleanup_every
-                if (self._count_slept%self._cleanup_every) == 0:
+                if self._time_slept > self._cleanup_every:
                     lg.debug("Cleaning up")
                     now = int(time.time())
                     with self.get_clean_lock():
@@ -209,7 +237,7 @@ class ClusterLockBase(object):
                                     .filter(LockContext.context==self._context)\
                                     .filter(LockContext.count < self._max_bound).update({"count": LockContext.count + 1})
                 
-                lg.debug("Release lock resulted in %d rows affected" % rc)
+                #lg.debug("Release lock resulted in %d rows affected" % rc)
                 
                 self._session.commit()
             except:
@@ -229,7 +257,7 @@ class Lock(ClusterLockBase):
         """
         Limited constructor
         """
-        super(Lock, self).__init__(engine, session, what, context, 0, 1, 1)
+        super(Lock, self).__init__(engine, session, what, context)
         
         
     def reset(self):
