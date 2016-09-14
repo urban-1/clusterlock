@@ -38,7 +38,7 @@ while [ True ]:
     print("%10s: Waiting" % name)
     with lock:
         print("%10s: Got it!" % name)
-        time.sleep(1)
+        time.sleep(uniform(0.5, 5.5))
     
     print("%10s: Released" % name)
     time.sleep(0.1)

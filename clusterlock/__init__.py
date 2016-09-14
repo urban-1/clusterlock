@@ -13,13 +13,21 @@ import setpath
 import os
 import socket
 
-__all__ = []
+__all__ = ['ClusterLockError']
+
+
+CLEAN_LOCK = None
 
 def get_who():
     return "%s:%d:%d" % (socket.getfqdn(), os.getpid(), threading.currentThread().ident)
 
 class ClusterLockError(Exception):
     pass
+
+
+class ClusterLockReleaseError(Exception):
+    pass
+
 
 class CustomBase(object):
     
@@ -43,6 +51,7 @@ class LockContext(Base):
     what = Column(String(512))       # What do we lock
     count = Column(Integer)          # Count for semaphores
     context = Column(String(512))    # Which software context (application)
+    duration = Column(Integer, default=-1)       # Average job duration (used to identify dead locks)
     events = relationship("LockEvent", cascade="all, delete-orphan")
 
     
@@ -53,7 +62,6 @@ class LockEvent(Base):
         PrimaryKeyConstraint('context_id', 'started', 'who'),
     )
     
-    #id = Column(Integer, Sequence('seq_cluster_lock_evt_id'), primary_key=True, autoincrement=True)
     context_id = Column(Integer, ForeignKey('cluster_lock_ctx.id'))
     started = Column(Integer)                  # When this started, epoch
     ended = Column(Integer, default=0)         # When this ended, epoch
@@ -63,7 +71,7 @@ class LockEvent(Base):
 
 class ClusterLockBase(object):
 
-    def __init__(self, engine, session, what, context="-", min_bound=0, max_bound=1, value=1, sleep_interval=0.1):
+    def __init__(self, engine, session, what, context="-", value=1, duration=-1, max_bound=1, min_bound=0, sleep_interval=0.1, cleanup_every=10):
         """
         Initialize the instance with a given session and engine
         """
@@ -73,6 +81,7 @@ class ClusterLockBase(object):
         self._context = context
         self._min_bound = min_bound
         self._max_bound = max_bound
+        self._cleanup_every = cleanup_every
         self._time_slept = 0
         self._sleep_interval = sleep_interval
         self._events = []
@@ -90,12 +99,14 @@ class ClusterLockBase(object):
             ll = LockContext(
                 what=what,
                 count=value,
-                context = context)
+                context = context,
+                duration=duration)
             
             self._session.add(ll)
             self._session.commit()
         except:
             self._session.rollback()
+            
         
     
     def __enter__(self):
@@ -103,6 +114,13 @@ class ClusterLockBase(object):
         
     def __exit__(self, type, value, traceback):
         self.release()
+        
+    def get_clean_lock(self):
+        global CLEAN_LOCK
+        if CLEAN_LOCK is None:
+            CLEAN_LOCK = ClusterLockBase(self._engine, self._session, "db", "clean-lock")
+        
+        return CLEAN_LOCK
     
     def aquire(self, max_wait=0):
         """
@@ -112,6 +130,7 @@ class ClusterLockBase(object):
         rc = 0
         who = get_who()
         self._time_slept = 0
+        self._count_slept = 0
         
         while rc == 0:
             lg.debug("Trying")
@@ -133,6 +152,31 @@ class ClusterLockBase(object):
                 
                 time.sleep(0.1)
                 self._time_slept += self._sleep_interval
+                self._count_slept += 1
+                
+                # cleanup_every
+                if (self._count_slept%self._cleanup_every) == 0:
+                    lg.debug("Cleaning up")
+                    now = int(time.time())
+                    with self.get_clean_lock():
+                        expired = self._session.query(LockEvent, LockContext)\
+                            .filter(LockEvent.context_id == LockContext.id)\
+                            .filter(LockContext.what == self._what)\
+                            .filter(LockContext.context == self._context)\
+                            .filter(LockContext.duration > 0)\
+                            .filter(now - LockEvent.started > LockContext.duration)\
+                            .all()
+                        
+                        # Loop and clean!
+                        for entry in expired:
+                            cid = entry[1].id
+                            lg.debug("Cleaning Context ID=%d, who=%s, started=%d" % (cid, entry[0].who, entry[0].started))
+                            # Remove lock event
+                            self._session.delete(entry[0])
+                            # Add one to the pool
+                            entry[1].count += 1
+                            # Done
+                            self._session.commit()
             else:
                 # Create our event...
                 ctx = LockContext.query.filter(LockContext.what==self._what and \
@@ -155,29 +199,29 @@ class ClusterLockBase(object):
         who = get_who()
         rc = 0
         
-        try:
-            
-            ## 2nd way
-            rc = LockContext.query.filter(LockContext.what==self._what)\
-                                .filter(LockContext.context==self._context)\
-                                .filter(LockContext.count < self._max_bound).update({"count": LockContext.count + 1})
-            
-            lg.debug("Release lock resulted in %d rows affected" % rc)
-            self._session.commit()
-            
-            # Delete our event...
-            if len(self._events):
-                self._session.delete(self._events[-1])
+        # Delete our event...
+        if len(self._events):
+            try:
+                self._session.delete(self._events.pop())
+                
+                # Reduce count ONLY of the above succeeds...
+                rc = LockContext.query.filter(LockContext.what==self._what)\
+                                    .filter(LockContext.context==self._context)\
+                                    .filter(LockContext.count < self._max_bound).update({"count": LockContext.count + 1})
+                
+                lg.debug("Release lock resulted in %d rows affected" % rc)
+                
                 self._session.commit()
-        except:
-            self._session.rollback()
-            print(traceback.format_exc())
-            lg.debug(traceback.format_exc())
+            except:
+                self._session.rollback()
+                lg.debug("... Timedout? Someone cleaned for us...")
+                #lg.debug(traceback.format_exc())
+
             
         if rc != 1:
             raise ClusterLockReleaseError("Number of releases mismatch! Someone consumes more!")
 
-
+    
 class Lock(ClusterLockBase):
     
     
@@ -194,7 +238,7 @@ class Lock(ClusterLockBase):
         """
         super(Lock, self).reset(1)
 
-
+        
 class Semaphore(ClusterLockBase):
     pass
 
