@@ -50,12 +50,18 @@ class ClusterCleanUpError(Exception):
 
 CLEAN_LOCKS = {}
 """One cleaner per thread, no more, no less"""
+
 CLEAN_FAIL_MSG = ("Failed to acquire 'clean-lock' which means that either the "
                   "db connection is not there or there is a locked entry "
                   "which you have to manually unlock. Cleaning the cleaning lock "
                   "has already failed... Nothing else I can do")
+"""The error message when we cannot clean the cleaner!"""
 
 def get_backend(cfgpath):
+    """
+    Helper function to get an engine and a session to the database given a
+    configuration file. For the format of this file look into `tests/config.json.sample`
+    """
     with open(cfgpath, "r") as f:
         cfg = json.loads(f.read())
     
@@ -74,11 +80,20 @@ def get_backend(cfgpath):
     return engine, session
 
 def get_who():
+    """
+    Return a cluster/globally unique identification. This is in the format:
+    
+        <hostname>:<process-id>:<thread-id>
+    
+    """
     return "%s:%d:%d" % (socket.getfqdn(), os.getpid(), threading.currentThread().ident)
 
 
 class CustomBase(object):
-    
+    """
+    A simple base I tend to use... It provides helper functions which will be
+    available to all the ORM classes
+    """
     def toDict(self):
        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
     
@@ -89,9 +104,14 @@ class CustomBase(object):
 
 
 Base = declarative_base(cls=CustomBase)
+"""Declarative base using our CustomBase class"""
 
 
 class LockContext(Base):
+    """
+    The ``cluster_lock_ctx`` table replresentation. This table specifies the
+    available locks/semaphores
+    """
     __tablename__ = 'cluster_lock_ctx'
     __table_args__ = (UniqueConstraint('what', 'context', name='_LockContext_uniq'),)
     
@@ -105,6 +125,11 @@ class LockContext(Base):
     
 
 class LockEvent(Base):
+    """
+    The ``cluster_lock_evt`` table replresentation. Keeps acquire/release entries.
+    At the moment we store only acquire events which is used to detect dead entries
+    and locks. Release will delete the entry
+    """
     __tablename__ = 'cluster_lock_evt'
     __table_args__ = (
         PrimaryKeyConstraint('context_id', 'started', 'who'),
@@ -118,7 +143,12 @@ class LockEvent(Base):
     
 
 class ClusterLockBase(object):
-
+    """
+    The base implementation of the database locking mechanisms. Both Locks and
+    Semaphores inherit this class. This class has the full functionality of
+    these objects, while the Lock just constrains it by overriding some methods
+    """
+    
     def __init__(self, engine, session, what, context="-", value=1, duration=-1, max_bound=1, min_bound=0, sleep_interval=0.1, cleanup_every=10):
         """
         Initialize the instance with a given session and engine
