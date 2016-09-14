@@ -40,10 +40,14 @@ class ClusterCleanUpError(Exception):
 CLEAN_LOCKS = {}
 """One cleaner per thread, no more, no less"""
 
-CLEAN_FAIL_MSG = ("Failed to acquire 'clean-lock' which means that either the "
-                  "db connection is not there or there is a locked entry "
-                  "which you have to manually unlock. Cleaning the cleaning lock "
-                  "has already failed... Nothing else I can do")
+CLEAN_DURATION = 30
+CLEAN_MAX_TIME = 120
+
+CLEAN_FAIL_MSG = ("Failed to acquire 'clean-lock' which means that:\n\n"
+                  "  (1) either the db connection is not there or\n"
+                  "  (2) indication of extrem request on a resource or\n"
+                  "  (3) there is a locked cleaner entry you have to manually unlock.\n\n"
+                  "Cleaning the cleaning lock has already failed... Nothing else I can do")
 """The error message when we cannot clean the cleaner!"""
 
 def get_backend(cfgpath):
@@ -211,7 +215,7 @@ class ClusterLockBase(object):
         # Aquire cleaning lock ... wait 30 seconds... if this fails
         # stop with the appropriate error message
         try:
-            cleanLock.aquire(max_wait=10) # TODO: Module level Parameter
+            cleanLock.aquire(max_wait=CLEAN_MAX_TIME)
         except ClusterLockError:
             raise ClusterCleanUpError(CLEAN_FAIL_MSG)
         
@@ -256,8 +260,8 @@ class ClusterLockBase(object):
         
         if tid not in CLEAN_LOCKS.keys():
             CLEAN_LOCKS[tid] = Lock(self._engine, self._session, "db", "clean-lock", 
-                                duration=30,      # Cleaner should not take more than ... TODO: Module level Parameter
-                                cleanup_every=10  # TODO: Module level Parameter
+                                duration=CLEAN_DURATION,      # Cleaner should not take more than ... 
+                                cleanup_every=CLEAN_MAX_TIME  # Do not clean before the cleaner times out...
                                 )
             CLEAN_LOCKS[tid].__attempted = False
         
