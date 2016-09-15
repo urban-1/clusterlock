@@ -9,6 +9,7 @@ from base64 import b64decode
 from sqlalchemy import Column, Integer, String, Boolean, UniqueConstraint, Sequence, Text, ForeignKey, PrimaryKeyConstraint, create_engine
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker, class_mapper
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.engine.reflection import Inspector
 
 
 
@@ -161,7 +162,8 @@ class ClusterLockBase(object):
         self._tag = "%s:%s" % (self._what, self._context)
         
         # Create schema only if required
-        if not engine.dialect.has_table(engine, "cluster_lock_ctx"): 
+        inspector = Inspector.from_engine(engine)
+        if "cluster_lock_ctx" not in inspector.get_table_names():
             Base.metadata.create_all(self._engine)
         
         
