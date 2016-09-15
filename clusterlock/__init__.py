@@ -185,7 +185,6 @@ class ClusterLockBase(object):
                     duration=duration)
                 
                 self._session.add(ll)
-                print("INSERT")
                 self._session.commit()
         except:
             self._session.rollback()
