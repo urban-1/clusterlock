@@ -16,6 +16,8 @@ import setpath
 import os
 import socket
 
+__version__ = "0.1"
+
 
 class ClusterLockError(Exception):
     """
