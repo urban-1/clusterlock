@@ -147,7 +147,7 @@ class ClusterLockBase(object):
     these objects, while the Lock just constrains it by overriding some methods
     """
     
-    def __init__(self, engine, session, what, context="-", value=1, duration=-1, max_bound=1, min_bound=0, sleep_interval=0.1, cleanup_every=10):
+    def __init__(self, engine, session, what, context="-", max_bound=1, value=-1, duration=-1, sleep_interval=0.1, cleanup_every=10):
         """
         Initialize the instance with a given session and engine
         """
@@ -155,13 +155,15 @@ class ClusterLockBase(object):
         self._session = session
         self._what = what
         self._context = context
-        self._min_bound = min_bound
+        self._min_bound = 0
         self._max_bound = max_bound
         self._cleanup_every = cleanup_every
         self._time_slept = 0
         self._sleep_interval = sleep_interval
         self._events = []
         self._tag = "%s:%s" % (self._what, self._context)
+        if value == -1:
+            value = max_bound
         
         # Create schema only if required:
         #  - Try to not conflict with other processes on the saem host (for tests)
@@ -197,7 +199,7 @@ class ClusterLockBase(object):
         
     
     def __enter__(self):
-        self.aquire()
+        self.acquire()
         
     def __exit__(self, type, value, traceback):
         self.release()
@@ -223,7 +225,7 @@ class ClusterLockBase(object):
         # Aquire cleaning lock ... wait 30 seconds... if this fails
         # stop with the appropriate error message
         try:
-            cleanLock.aquire(max_wait=CLEAN_MAX_TIME)
+            cleanLock.acquire(max_wait=CLEAN_MAX_TIME)
         except ClusterLockError:
             raise ClusterCleanUpError(CLEAN_FAIL_MSG)
         
@@ -275,7 +277,7 @@ class ClusterLockBase(object):
         
         return CLEAN_LOCKS[tid]
     
-    def aquire(self, max_wait=0):
+    def acquire(self, max_wait=0):
         """
         Acquire.
         """
@@ -304,7 +306,7 @@ class ClusterLockBase(object):
                 time.sleep(0.1)
                 self._time_slept += self._sleep_interval
                 
-                # Handle max_time here since we failed to aquire
+                # Handle max_time here since we failed to acquire
                 #lg.debug("MAX %s: %.2f >= %.2f" % (self._tag, self._time_slept, max_wait))
                 if max_wait > 0 and self._time_slept >= max_wait:
                     raise ClusterLockError("Max time used... failed to acquire")
@@ -367,7 +369,7 @@ class Lock(ClusterLockBase):
         """
         Limited constructor
         """
-        super(Lock, self).__init__(engine, session, what, context, value=1, max_bound=1, min_bound=0, **kw)
+        super(Lock, self).__init__(engine, session, what, context, value=1, max_bound=1, **kw)
         
         
     def reset(self):
