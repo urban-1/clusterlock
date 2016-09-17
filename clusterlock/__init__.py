@@ -4,6 +4,7 @@ import threading
 import time
 import json
 from base64 import b64decode
+from multiprocessing import Lock as mLock
 
 
 from sqlalchemy import Column, Integer, String, Boolean, UniqueConstraint, Sequence, Text, ForeignKey, PrimaryKeyConstraint, create_engine
@@ -39,6 +40,7 @@ class ClusterLockReleaseError(Exception):
 class ClusterCleanUpError(Exception):
     pass
 
+CREATE_LOCK = mLock()
 
 CLEAN_LOCKS = {}
 """One cleaner per thread, no more, no less"""
@@ -68,7 +70,7 @@ def get_backend(cfgpath):
     elif cfg["mode"] == "mysql":
         m = cfg["mysql"]
         url = "%s%s:%s@%s/%s" % \
-            (m['proto'], m['user'], b64decode(m['pass']), m['host'], m['database'])
+            (m['proto'], m['user'], b64decode(m['pass']).decode(), m['host'], m['database'])
     
     engine = create_engine(url)
     session = scoped_session(sessionmaker(bind=engine))
@@ -161,10 +163,13 @@ class ClusterLockBase(object):
         self._events = []
         self._tag = "%s:%s" % (self._what, self._context)
         
-        # Create schema only if required
-        inspector = Inspector.from_engine(engine)
-        if "cluster_lock_ctx" not in inspector.get_table_names():
-            Base.metadata.create_all(self._engine)
+        # Create schema only if required:
+        #  - Try to not conflict with other processes on the saem host (for tests)
+        #  - There is nothing we can do for remote processes creating the tables
+        with CREATE_LOCK:
+            inspector = Inspector.from_engine(engine)
+            if "cluster_lock_ctx" not in inspector.get_table_names():
+                Base.metadata.create_all(self._engine)
         
         
         Base.query = self._session.query_property()

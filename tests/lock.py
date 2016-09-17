@@ -14,7 +14,7 @@ if len(sys.argv) < 2:
     print("Ahhmm i need a job name as 1st argument")
     exit()
 
-lg.basicConfig(level=lg.DEBUG)
+lg.basicConfig(level=lg.INFO)
 
 engine, session = get_backend("config.json")
 
