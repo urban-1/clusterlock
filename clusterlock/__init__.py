@@ -155,7 +155,10 @@ class LockContext(Base):
     available locks/semaphores
     """
     __tablename__ = 'cluster_lock_ctx'
-    __table_args__ = (UniqueConstraint('what', 'context', name='_LockContext_uniq'),)
+    __table_args__ = (
+        UniqueConstraint('what', 'context', name='_LockContext_uniq'),
+        {'mysql_engine':'MEMORY'}
+    )
     
     id = Column(Integer, Sequence('seq_cluster_lock_ctx_id'), primary_key=True, autoincrement=True)
     what = Column(String(512))       # What do we lock
@@ -177,6 +180,7 @@ class LockEvent(Base):
     __tablename__ = 'cluster_lock_evt'
     __table_args__ = (
         PrimaryKeyConstraint('context_id', 'started', 'who'),
+        {'mysql_engine':'MEMORY'}
     )
     
     context_id = Column(Integer, ForeignKey('cluster_lock_ctx.id'), autoincrement=False)
