@@ -6,6 +6,8 @@ import json
 from base64 import b64decode
 from multiprocessing import Lock as mLock
 import random
+import signal
+import sys
 
 
 from sqlalchemy import Column, Integer, String, Boolean, UniqueConstraint, Sequence, Text, ForeignKey, PrimaryKeyConstraint, create_engine
@@ -189,7 +191,7 @@ class ClusterLockBase(object):
     these objects, while the Lock just constrains it by overriding some methods
     """
     
-    def __init__(self, engine, session, what, context="-", max_bound=1, value=-1, duration=-1, sleep_interval=0.5, cleanup_every=10):
+    def __init__(self, engine, session, what, context="-", max_bound=1, value=-1, duration=-1, sleep_interval=0.5, cleanup_every=60):
         """
         Initialize the instance with a given session and engine
         """
@@ -214,7 +216,7 @@ class ClusterLockBase(object):
         #  - There is nothing we can do for remote processes creating the tables
         with CREATE_LOCK:
             try:
-                Base.metadata.create_all()
+                Base.metadata.create_all(self._engine)
             except:
                 pass
         
@@ -402,8 +404,15 @@ class ClusterLockBase(object):
         
         # Delete our event...
         if len(self._events):
+            entry = None
+            for e in self._events:
+                if e.who == who:
+                    entry = e
+                    break
             try:
-                self._session.delete(self._events.pop())
+                if entry is not None:
+                    self._session.delete(entry)
+                    self._events.remove(entry)
                 
                 # Reduce count ONLY of the above succeeds...
                 rc = LockContext.query.filter(LockContext.what==self._what)\
@@ -415,6 +424,7 @@ class ClusterLockBase(object):
                 self._session.commit()
             except:
                 self._session.rollback()
+                print(traceback.format_exc())
                 lg.debug("... Timedout? Someone cleaned for us...")
                 #lg.debug(traceback.format_exc())
 
@@ -445,3 +455,11 @@ class Lock(ClusterLockBase):
 class Semaphore(ClusterLockBase):
     pass
 
+                    
+
+def exit_gracefully(signal, frame):
+    print('got SIGTERM')
+    sys.exit(0)
+
+def install_exit_strategy():
+    signal.signal(signal.SIGTERM, exit_gracefully)

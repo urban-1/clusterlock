@@ -23,7 +23,7 @@ function ctrl_c() {
     exit 0
 }
 
-for i in {1..20}
+for i in {1..2}
 do
     echo "Spawning $i"
     $app "job-$i" &

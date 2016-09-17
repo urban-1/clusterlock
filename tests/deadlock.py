@@ -8,9 +8,9 @@ from random import uniform, randint
 
 import setpath
 
-from clusterlock import Lock, get_backend, acquire_all
+from clusterlock import Lock, get_backend, acquire_all, install_exit_strategy
 
-lg.basicConfig(level=lg.INFO)
+lg.basicConfig(level=lg.DEBUG)
 
 if len(sys.argv) < 2:
     print("Ahhmm i need a job name as 1st argument")
@@ -26,6 +26,8 @@ engine, session = get_backend("config.json")
 locks = [Lock(engine, session, "device", "light-levels", sleep_interval=1),
          Lock(engine, session, "device", "irrelevant", sleep_interval=1),
          Lock(engine, session, "device", "apsou", sleep_interval=1)]
+
+install_exit_strategy()
 
 while [ True ]:
     l1 = randint(0, len(locks)-1)
