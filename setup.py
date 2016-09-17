@@ -8,17 +8,20 @@ try:
 except ImportError:
     from distutils.core import setup
 
-from clusterlock import __version__
 
 
 with open('README.rst') as readme_file:
     readme = readme_file.read()
+    
+
+with open('VERSION') as vf:
+    version = vf.read()
 
 
 setup(
     name='clusterlock',
-    version=__version__,
-    description="A database based locking and semaphore implementation",
+    version=version,
+    description="A database based distributed locking and semaphore implementation",
     long_description=readme,
     author="Andreas Bontozoglou",
     author_email='bodozoglou@gmail.com',
@@ -32,7 +35,7 @@ setup(
         'SQLAlchemy'
     ],
     license="WTFPL",
-    keywords='distributed database lock semaphre',
+    keywords='distributed database lock semaphore',
     classifiers=[
         'Development Status :: 4 - Beta',
         'Intended Audience :: Developers',

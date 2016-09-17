@@ -18,8 +18,6 @@ import setpath
 import os
 import socket
 
-__version__ = "0.1"
-
 
 class ClusterLockError(Exception):
     """
@@ -46,7 +44,7 @@ CLEAN_LOCKS = {}
 """One cleaner per thread, no more, no less"""
 
 CLEAN_DURATION = 30
-CLEAN_MAX_TIME = 120
+CLEAN_MAX_TIME = 60
 
 CLEAN_FAIL_MSG = ("Failed to acquire 'clean-lock' which means that:\n\n"
                   "  (1) either the db connection is not there or\n"
@@ -147,7 +145,7 @@ class ClusterLockBase(object):
     these objects, while the Lock just constrains it by overriding some methods
     """
     
-    def __init__(self, engine, session, what, context="-", max_bound=1, value=-1, duration=-1, sleep_interval=0.1, cleanup_every=10):
+    def __init__(self, engine, session, what, context="-", max_bound=1, value=-1, duration=-1, sleep_interval=0.1, cleanup_every=60):
         """
         Initialize the instance with a given session and engine
         """
@@ -303,7 +301,7 @@ class ClusterLockBase(object):
             if rc == 0:
                 
                 # Sleep as for a while
-                time.sleep(0.1)
+                time.sleep(self._sleep_interval)
                 self._time_slept += self._sleep_interval
                 
                 # Handle max_time here since we failed to acquire

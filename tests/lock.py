@@ -20,7 +20,7 @@ engine, session = get_backend("config.json")
 
 # Create a new lock for a specific device under the domain 
 # light-levels
-lock = Lock(engine, session, "device", "light-levels")
+lock = Lock(engine, session, "device", "light-levels", sleep_interval=1)
 name = sys.argv[1]
 
 while [ True ]:
@@ -30,5 +30,4 @@ while [ True ]:
         time.sleep(uniform(9, 15.5))
     
     print("%10s: Released" % name)
-    time.sleep(0.1)
 

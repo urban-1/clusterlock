@@ -1,6 +1,6 @@
 # clusterlock
 
-A database based locking and semaphore implementation
+A database-based distributed locking and semaphore implementation
 
 ## What is `clusterlock`?
 
@@ -121,6 +121,18 @@ Two tables are created:
 1.  `cluster_lock_evt`: The currently active locks and their timestamps
 
 
+## Discussion
+
+Advantages:
+
+- No locking service/server required
+- Decentralised, each script/app deals directly with the DB
+- Simple - no message buses - just the SQL driver messages
+- Minimal requirements
+
+Disadvantages
+
+- Slower than in-memory solution
 
     
 
