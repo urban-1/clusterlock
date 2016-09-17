@@ -111,7 +111,13 @@ in such way that:
 
 `cleanup_every` parameter: How often you want the cleaner to run. This changes depending
 on the context. In general, this should be greater than `duration` To avoid 
-overwhelming the cleaning function
+overwhelming the cleaning function.
+
+Now, depending on your database performance you might want to change the 
+default parameters `CLEAN_DURATION` and `CLEAN_MAX_TIME` in the source. These
+define the limits and behaviour of the cleaning Lock.
+
+    
 
 ## Internals
 
@@ -125,14 +131,16 @@ Two tables are created:
 
 Advantages:
 
-- No locking service/server required
+- No locking service/server required (avoiding the complexity of managing it: resiliency, ports, synchronization, etc)
 - Decentralised, each script/app deals directly with the DB
-- Simple - no message buses - just the SQL driver messages
-- Minimal requirements
+- Minimal module requirements
+- As resilient as your database
+- Simple
 
 Disadvantages
 
-- Slower than in-memory solution
+- Slower than in-memory solutions
+- As resilient as your database
 
     
 

@@ -145,7 +145,7 @@ class ClusterLockBase(object):
     these objects, while the Lock just constrains it by overriding some methods
     """
     
-    def __init__(self, engine, session, what, context="-", max_bound=1, value=-1, duration=-1, sleep_interval=0.1, cleanup_every=60):
+    def __init__(self, engine, session, what, context="-", max_bound=1, value=-1, duration=-1, sleep_interval=0.5, cleanup_every=10):
         """
         Initialize the instance with a given session and engine
         """
@@ -160,6 +160,8 @@ class ClusterLockBase(object):
         self._sleep_interval = sleep_interval
         self._events = []
         self._tag = "%s:%s" % (self._what, self._context)
+        self._duration = duration
+        
         if value == -1:
             value = max_bound
         
@@ -310,7 +312,10 @@ class ClusterLockBase(object):
                     raise ClusterLockError("Max time used... failed to acquire")
                 
                 # Handle cleaning
-                if self._cleanup_every > 0 and self._time_slept > self._cleanup_every:
+                # No point if:
+                #  - cleaning is disabled
+                #  - duration is unknown!
+                if self._cleanup_every > 0 and self._duration > 0 and self._time_slept > self._cleanup_every:
                     self.__handle_cleanup()
                     
             else:

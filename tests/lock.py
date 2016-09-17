@@ -30,4 +30,6 @@ while [ True ]:
         time.sleep(uniform(9, 15.5))
     
     print("%10s: Released" % name)
+    # Give a chance to others
+    time.sleep(0.5)
 
