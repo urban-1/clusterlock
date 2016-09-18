@@ -41,14 +41,15 @@ class ClusterLockReleaseError(Exception):
 class ClusterCleanUpError(Exception):
     pass
 
+
 CREATE_LOCK = mLock()
+"""Host local create tables lock"""
 
 CLEAN_LOCKS = {}
 """One cleaner per thread, no more, no less"""
 
 CLEAN_DURATION = 30
 CLEAN_MAX_TIME = 60
-
 CLEAN_FAIL_MSG = ("Failed to acquire 'clean-lock' which means that:\n\n"
                   "  (1) either the db connection is not there or\n"
                   "  (2) indication of extrem request on a resource or\n"
@@ -57,6 +58,35 @@ CLEAN_FAIL_MSG = ("Failed to acquire 'clean-lock' which means that:\n\n"
 """The error message when we cannot clean the cleaner!"""
 
 GLOBAL_LOCKS = {}
+
+BACKENDS = {}
+
+
+def init_db(engine, session):
+    """
+    Initialize the module, this should be called in every thread!
+    """
+    tid = get_who()
+    if tid not in BACKENDS.keys():
+        BACKENDS[tid] = (engine, session)
+    
+    if len(BACKENDS) == 1:
+        with CREATE_LOCK:
+            try:
+                lg.info("Creating schema if needed")
+                Base.metadata.create_all(bind=engine)
+            except:
+                pass
+        
+def get_db():
+    """
+    Returns a tuple : engine, session for this thread
+    """
+    tid = get_who()
+    if tid not in BACKENDS.keys():
+        raise RuntimeError("You must call init() in every thread")
+    return BACKENDS[tid]
+    
 
 def get_backend(cfgpath):
     """
@@ -90,6 +120,33 @@ def get_who():
     return "%s:%d:%d" % (socket.getfqdn(), os.getpid(), threading.currentThread().ident)
 
 
+def get_clean_lock():
+    
+    # Get a unique thread-safe ID
+    tid = get_who()
+    
+    if tid not in CLEAN_LOCKS.keys():
+        CLEAN_LOCKS[tid] = Lock("db", "clean-lock", 
+                            duration=CLEAN_DURATION,      # Cleaner should not take more than ... 
+                            cleanup_every=CLEAN_MAX_TIME  # Do not clean before the cleaner times out...
+                            )
+        CLEAN_LOCKS[tid].__attempted = False
+    
+    return CLEAN_LOCKS[tid]
+
+def get_global_lock():
+    
+    # Get a unique thread-safe ID
+    tid = get_who()
+    
+    if tid not in GLOBAL_LOCKS.keys():
+        GLOBAL_LOCKS[tid] = Lock("db", "global-lock", 
+                            duration=10,
+                            cleanup_every=10
+                            )
+    
+    return GLOBAL_LOCKS[tid]
+    
 def acquire_all(locks, max_wait_per_lock=1, sleep_time=.5, total_wait=None):
     """
     Acquire all locks or none... This should avoid deadlocks
@@ -100,7 +157,7 @@ def acquire_all(locks, max_wait_per_lock=1, sleep_time=.5, total_wait=None):
     while [ True ]:
         
         # Lock global
-        with locks[0].getGlobalLock():
+        with locks[0].get_global_lock():
             lg.debug("Got global lock")
             # Try to lock all
             gotThem = True
@@ -200,12 +257,11 @@ class ClusterLockBase(object):
     these objects, while the Lock just constrains it by overriding some methods
     """
     
-    def __init__(self, engine, session, what, context="-", max_bound=1, value=-1, duration=-1, sleep_interval=0.5, cleanup_every=10):
+    def __init__(self, what, context="-", max_bound=1, value=-1, duration=-1, sleep_interval=0.5, cleanup_every=10):
         """
         Initialize the instance with a given session and engine
         """
-        self._engine = engine
-        self._session = session
+        self._engine, self._session = get_db()
         self._what = what
         self._context = context
         self._min_bound = 0
@@ -220,16 +276,6 @@ class ClusterLockBase(object):
         
         if value == -1:
             value = max_bound
-        
-        # Create schema only if required:
-        #  - Try to not conflict with other processes on the same host (for tests)
-        #  - There is nothing we can do for remote processes creating the tables
-        with CREATE_LOCK:
-            try:
-                Base.metadata.create_all(self._engine)
-            except:
-                pass
-        
         
         Base.query = self._session.query_property()
         
@@ -268,7 +314,7 @@ class ClusterLockBase(object):
         #lg.debug("CLEAN %s: %.2f >= %.2f" % (self._tag, self._time_slept, self._cleanup_every))
         lg.debug("%s: Cleaning up" % self._tag)
         
-        cleanLock = self.getCleanLock()
+        cleanLock = get_clean_lock()
         # Handle cleaning the cleaner!
         if self._tag == "db:clean-lock":
             lg.info("Cleaning the cleaner (did this already? = %s)" % str(cleanLock.__attempted))
@@ -322,32 +368,7 @@ class ClusterLockBase(object):
             if self._tag == "db:clean-lock":
                 cleanLock.__attempted = False
         
-    def getCleanLock(self):
-        
-        # Get a unique thread-safe ID
-        tid = get_who()
-        
-        if tid not in CLEAN_LOCKS.keys():
-            CLEAN_LOCKS[tid] = Lock(self._engine, self._session, "db", "clean-lock", 
-                                duration=CLEAN_DURATION,      # Cleaner should not take more than ... 
-                                cleanup_every=CLEAN_MAX_TIME  # Do not clean before the cleaner times out...
-                                )
-            CLEAN_LOCKS[tid].__attempted = False
-        
-        return CLEAN_LOCKS[tid]
-    
-    def getGlobalLock(self):
-        
-        # Get a unique thread-safe ID
-        tid = get_who()
-        
-        if tid not in GLOBAL_LOCKS.keys():
-            GLOBAL_LOCKS[tid] = Lock(self._engine, self._session, "db", "global-lock", 
-                                duration=10,
-                                cleanup_every=10
-                                )
-        
-        return GLOBAL_LOCKS[tid]
+
     
     def acquire(self, max_wait=0):
         """
@@ -356,7 +377,7 @@ class ClusterLockBase(object):
         lg.debug("Aquire %s" % self._tag)
         rc = 0
         who = get_who()
-        self._time_slept = 0
+        self._started = time.time()
         
         while rc == 0:
             #lg.debug("Trying")
@@ -376,18 +397,18 @@ class ClusterLockBase(object):
                 
                 # Sleep as for a while
                 time.sleep(self._sleep_interval)
-                self._time_slept += self._sleep_interval
+                time_slept = time.time() - self._started
                 
                 # Handle max_wait here since we failed to acquire
-                #lg.debug("MAX %s: %.2f >= %.2f" % (self._tag, self._time_slept, max_wait))
-                if max_wait > 0 and self._time_slept >= max_wait:
+                #lg.debug("MAX %s: %.2f >= %.2f" % (self._tag, time_slept, max_wait))
+                if max_wait > 0 and time_slept >= max_wait:
                     raise ClusterLockError("Max time used... failed to acquire")
                 
                 # Handle cleaning
                 # No point if:
                 #  - cleaning is disabled
                 #  - duration is unknown!
-                if self._cleanup_every > 0 and self._duration > 0 and self._time_slept > self._cleanup_every:
+                if self._cleanup_every > 0 and self._duration > 0 and time_slept > self._cleanup_every:
                     self.__handle_cleanup()
                     
             else:
@@ -436,35 +457,7 @@ class ClusterLockBase(object):
             
         if rc != 1:
             raise ClusterLockReleaseError("Number of releases mismatch! Someone consumes more! (%s)" % self._tag)
-        
-        
-    def cleanAll(self):
-        """
-        Clean all active lock entries... 
-        
-        This will cause all acquires that happen via ``with`` context to raise
-        ClusterLockReleaseError on collection ...
-        """
-        if self.__is_context_manager is True:
-            lg.debug("Skipping %s " % self._tag)
-            return
-        
-        lg.debug("Terminate %s" % self._tag)
-        
-        ours = self._session.query(LockEvent, LockContext)\
-            .filter(LockEvent.context_id == LockContext.id)\
-            .filter(LockContext.what == self._what)\
-            .filter(LockContext.context == self._context)\
-            .all()
-        
-        for entry in ours:
-            lg.debug(entry[0])
-            lg.debug(entry[1])
-            self._session.delete(entry[0])
-            # Add one to the pool
-            entry[1].count += 1
-            # Done
-            self._session.commit()
+            
             
     
 class Lock(ClusterLockBase):
@@ -472,11 +465,11 @@ class Lock(ClusterLockBase):
     The Lock class allows for only one lock at a time
     """
     
-    def __init__(self, engine, session, what, context="-", **kw):
+    def __init__(self, what, context="-", **kw):
         """
         Limited constructor
         """
-        super(Lock, self).__init__(engine, session, what, context, value=1, max_bound=1, **kw)
+        super(Lock, self).__init__(what, context, value=1, max_bound=1, **kw)
         
         
     def reset(self):
@@ -489,16 +482,4 @@ class Lock(ClusterLockBase):
 class Semaphore(ClusterLockBase):
     pass
 
-                    
 
-def exit_gracefully(signal, frame):
-    lg.info('Got SIGTERM')
-    import gc
-    for o in gc.get_objects():
-        if isinstance(o, ClusterLockBase):
-            o.cleanAll()
-            
-    sys.exit(0)
-
-def install_exit_strategy():
-    signal.signal(signal.SIGTERM, exit_gracefully)

@@ -7,8 +7,7 @@ import logging as lg
 from random import uniform, randint
 
 import setpath
-
-from clusterlock import Lock, get_backend, acquire_all, install_exit_strategy
+import clusterlock as cl
 
 lg.basicConfig(level=lg.DEBUG)
 
@@ -18,14 +17,13 @@ if len(sys.argv) < 2:
     
 name = sys.argv[1]
 
-
-engine, session = get_backend("config.json")
+cl.init_db(*cl.get_backend("config.json"))
 
 # Create a new lock for a specific device under the domain 
 # light-levels
-locks = [Lock(engine, session, "device", "light-levels", sleep_interval=1),
-         Lock(engine, session, "device", "irrelevant", sleep_interval=1),
-         Lock(engine, session, "device", "apsou", sleep_interval=1)]
+locks = [Lock("device", "light-levels", sleep_interval=1),
+         Lock("device", "irrelevant", sleep_interval=1),
+         Lock("device", "apsou", sleep_interval=1)]
 
 install_exit_strategy()
 

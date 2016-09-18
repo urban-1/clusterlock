@@ -7,8 +7,8 @@ import logging as lg
 from random import uniform
 
 import setpath
+import clusterlock as cl
 
-from clusterlock import Lock, get_backend
 
 if len(sys.argv) < 2:
     print("Ahhmm i need a job name as 1st argument")
@@ -16,12 +16,13 @@ if len(sys.argv) < 2:
 
 lg.basicConfig(level=lg.INFO)
 
-engine, session = get_backend("config.json")
+cl.init_db(*cl.get_backend("config.json"))
 
 # Create a new lock for a specific device under the domain 
 # light-levels
-lock = Lock(engine, session, "device", "light-levels", sleep_interval=1)
+lock = cl.Lock("device", "light-levels", sleep_interval=1)
 name = sys.argv[1]
+
 
 while [ True ]:
     print("%10s: Waiting" % name)

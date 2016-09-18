@@ -43,10 +43,15 @@ API parameters and definition!
 `Semaphore` and `Lock`. The `Lock` is a "short-cut" to a `Semaphore` configured for
 maximum one process at any given time.
 
-To create a lock we need a SQLAlchemy `engine` and `session`, clusterlock will 
-do the rest (including creating tables if not there):
+To create a lock we first need to initialize the module with a SQLAlchemy 
+`engine` and `session`. This should be done in every thread and will create
+the tables if missing:
 
-    lock = Lock(engine, session, "device", "snmp-query")
+    clusterlock.init_db(engine, session)
+
+The we are good to create a Lock for a specific target and context:
+
+    lock = Lock("device", "snmp-query")
     
 To acquire the lock you can either use:
 
@@ -88,7 +93,24 @@ Example:
     lock = Semaphore(engine, session, "device", "get-config",\
                      value=5, max_bound=5, duration=2, sleep_interval=0.1, cleanup_every=3)
 
-                     
+
+### What about deadlocks?
+
+Deadlocks are created when two processes wait on each others resources, ie process 
+A got resource #1 and waits on #2 which process B has acquired #2 and waits on #1.
+These two will timeout or stay blocked for ever.
+
+In general, deadlocks are possible when processes require more than one resource.
+In such cases you should use `aquire_all` function:
+
+    acquire_all(locks, max_wait_per_lock=1, sleep_time=.5, total_wait=None)
+    
+This will first try to acquire a lock called `db:global-lock`. Once it has it, 
+we are allowed to try to get multiple locks (given as the first argument
+to the function). If any of the locks fail to be acquired the global lock is 
+release and we sleep for `sleep_time` before we try again. This goes on
+forever or until `total_wait` has passed.
+
 ### Cleaning up
 
 Processes tend to die... and this leaves locked context. To tackle it we 
@@ -107,7 +129,7 @@ in such way that:
     can be: (1) extreme load, (2) dead and locked cleaning process - killed while
     cleaning. If you see too many of those you need to tune the cleaning
     
-#### Tuning the cleaner on a per-context basis
+#### Tuning the cleaner
 
 `cleanup_every` parameter: How often you want the cleaner to run. This changes depending
 on the context. In general, this should be greater than `duration` To avoid 
@@ -117,6 +139,7 @@ Now, depending on your database performance you might want to change the
 default parameters `CLEAN_DURATION` and `CLEAN_MAX_TIME` in the source. These
 define the limits and behaviour of the cleaning Lock.
 
+
     
 
 ## Internals
@@ -125,6 +148,11 @@ Two tables are created:
 
 1.  `cluster_lock_ctx`: All known contexts and their lock status
 1.  `cluster_lock_evt`: The currently active locks and their timestamps
+
+### Clean Lock
+
+
+### Global Lock
 
 
 ## Discussion
