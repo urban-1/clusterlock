@@ -16,7 +16,6 @@ if len(sys.argv) < 2:
 lg.basicConfig(level=lg.DEBUG)
 
 cl.init_db(*cl.get_backend("config.json"))
-#cl.install_exit_strategy()
 
 # Create a new lock for a specific device under the domain 
 # light-levels
@@ -30,7 +29,7 @@ while [ True ]:
     try:
         lock.acquire(max_wait=5)
     except cl.ClusterLockError as e:
-        print(e.msg)
+        print(str(e))
         continue
     
     print("%10s: Got it!" % name)
