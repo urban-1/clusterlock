@@ -1,6 +1,6 @@
 # clusterlock
 
-A database-based distributed locking and semaphore implementation
+A database-based distributed locking and semaphore implementation. (a.k.a. distributed lock manager)
 
 ## What is `clusterlock`?
 
