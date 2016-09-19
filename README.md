@@ -97,7 +97,7 @@ Example:
 ### What about deadlocks?
 
 Deadlocks are created when two processes wait on each others resources, ie process 
-A got resource #1 and waits on #2 which process B has acquired #2 and waits on #1.
+A got resource #1 and waits on #2 while process B has acquired #2 and waits on #1.
 These two will timeout or stay blocked for ever.
 
 In general, deadlocks are possible when processes require more than one resource.
@@ -108,7 +108,7 @@ In such cases you should use `aquire_all` function:
 This will first try to acquire a lock called `db:global-lock`. Once it has it, 
 we are allowed to try to get multiple locks (given as the first argument
 to the function). If any of the locks fail to be acquired the global lock is 
-release and we sleep for `sleep_time` before we try again. This goes on
+released and we sleep for `sleep_time` before we try again. This goes on
 forever or until `total_wait` has passed.
 
 ### Cleaning up
